@@ -1,0 +1,47 @@
+# Base image
+Bootstrap: docker
+From: pytorch/pytorch:2.4.1-cuda11.8-cudnn9-runtime
+
+%post
+	# Update image contents to have latest python3 and pip3 for image
+	apt-get update
+	apt-get install -y vim curl
+	apt-get install msttcorefonts -qq
+	
+	# Install python packages 
+
+    echo "\n\n\n\n\n"
+	pip3 install --upgrade pip
+    echo "\n\n\n\n\n"
+    cd /app
+	pip3 install .
+    echo "\n\n\n\n\n"
+    cd /app/CTF-for-Science
+	pip3 install -e .[all]
+    echo "\n\n\n\n\n"
+
+%environment
+    export HF_TOKEN="<TOKEN>"
+
+%files
+	/mmfs1/home/alexeyy/storage/CTF-for-Science/MANIFEST.in /app/CTF-for-Science/MANIFEST.in
+	/mmfs1/home/alexeyy/storage/CTF-for-Science/__init__.py /app/CTF-for-Science/__init__.py
+	/mmfs1/home/alexeyy/storage/CTF-for-Science/ctf4science /app/CTF-for-Science/ctf4science
+	/mmfs1/home/alexeyy/storage/CTF-for-Science/data /app/CTF-for-Science/data
+	/mmfs1/home/alexeyy/storage/CTF-for-Science/pyproject.toml /app/CTF-for-Science/pyproject.toml
+    
+    /mmfs1/home/alexeyy/storage/CTF-for-Science/models/llmtime/pyproject.toml /app/pyproject.toml
+
+%runscript
+    huggingface-cli login --token "<TOKEN>"
+
+    case ${@} in
+        "")
+            # Launch an interactive shell if no arguments are given:
+            exec /bin/bash
+            ;;
+        *)
+            # If any arguments are given, attempt to run them as a command:
+            exec ${@}
+            ;;
+    esac

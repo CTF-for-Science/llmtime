@@ -1,0 +1,8 @@
+dataset:
+  name: Lorenz_Official
+  pair_id:
+  - 6
+model:
+  name: llmtime
+  recon_ctx: 20
+  validation: 0

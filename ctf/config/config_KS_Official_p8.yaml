@@ -1,0 +1,8 @@
+dataset:
+  name: KS_Official
+  pair_id:
+  - 8
+model:
+  name: llmtime
+  recon_ctx: 20
+  validation: 0

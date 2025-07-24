@@ -4,9 +4,9 @@ os.environ['OMP_NUM_THREADS'] = '4'
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import openai
-openai.api_key = os.environ['OPENAI_API_KEY']
-openai.api_base = os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
+#import openai
+#openai.api_key = os.environ['OPENAI_API_KEY']
+#openai.api_base = os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
 from data.serialize import SerializerSettings
 from models.utils import grid_iter
 from models.promptcast import get_promptcast_predictions_data
@@ -39,81 +39,29 @@ def plot_preds(train, test, pred_dict, model_name, show_samples=False):
         if nll is not None:
             plt.text(0.03, 0.85, f'NLL/D: {nll:.2f}', transform=plt.gca().transAxes, bbox=dict(facecolor='white', alpha=0.5))
     plt.show()
-
-
+    plt.savefig(f'{model_name}.png')
+    plt.close()
 
 print(torch.cuda.max_memory_allocated())
 print()
 
-gpt4_hypers = dict(
-    alpha=0.3,
-    basic=True,
+llama_hypers = dict(
     temp=1.0,
-    top_p=0.8,
-    settings=SerializerSettings(base=10, prec=3, signed=True, time_sep=', ', bit_sep='', minus_sign='-')
-)
-
-mistral_api_hypers = dict(
-    alpha=0.3,
-    basic=True,
-    temp=1.0,
-    top_p=0.8,
-    settings=SerializerSettings(base=10, prec=3, signed=True, time_sep=', ', bit_sep='', minus_sign='-')
-)
-
-gpt3_hypers = dict(
-    temp=0.7,
-    alpha=0.95,
+    alpha=0.99,
     beta=0.3,
     basic=False,
-    settings=SerializerSettings(base=10, prec=3, signed=True, half_bin_correction=True)
+    settings=SerializerSettings(base=10, prec=3, time_sep=',', bit_sep='', plus_sign='', minus_sign='-', signed=True), 
 )
-
-
-llma2_hypers = dict(
-    temp=0.7,
-    alpha=0.95,
-    beta=0.3,
-    basic=False,
-    settings=SerializerSettings(base=10, prec=3, signed=True, half_bin_correction=True)
-)
-
-
-promptcast_hypers = dict(
-    temp=0.7,
-    settings=SerializerSettings(base=10, prec=0, signed=True, 
-                                time_sep=', ',
-                                bit_sep='',
-                                plus_sign='',
-                                minus_sign='-',
-                                half_bin_correction=False,
-                                decimal_point='')
-)
-
-arima_hypers = dict(p=[12,30], d=[1,2], q=[0])
 
 model_hypers = {
-     'LLMTime GPT-3.5': {'model': 'gpt-3.5-turbo-instruct', **gpt3_hypers},
-     'LLMTime GPT-4': {'model': 'gpt-4', **gpt4_hypers},
-     'LLMTime GPT-3': {'model': 'text-davinci-003', **gpt3_hypers},
-     'PromptCast GPT-3': {'model': 'text-davinci-003', **promptcast_hypers},
-     'LLMA2': {'model': 'llama-7b', **llma2_hypers},
-     'mistral': {'model': 'mistral', **llma2_hypers},
-     'mistral-api-tiny': {'model': 'mistral-api-tiny', **mistral_api_hypers},
-     'mistral-api-small': {'model': 'mistral-api-tiny', **mistral_api_hypers},
-     'mistral-api-medium': {'model': 'mistral-api-tiny', **mistral_api_hypers},
-     'ARIMA': arima_hypers,
-    
- }
-
-
-model_predict_fns = {
-    #'LLMA2': get_llmtime_predictions_data,
-    #'mistral': get_llmtime_predictions_data,
-    #'LLMTime GPT-4': get_llmtime_predictions_data,
-    'mistral-api-tiny': get_llmtime_predictions_data
+    'llama-7b': {'model': 'llama-7b', **llama_hypers},
+    #'llama-70b': {'model': 'llama-70b', **llama_hypers},
 }
 
+model_predict_fns = {
+    'llama-7b': get_llmtime_predictions_data,
+    #'llama-70b': get_llmtime_predictions_data,
+}
 
 model_names = list(model_predict_fns.keys())
 
@@ -131,4 +79,6 @@ for model in model_names: # GPT-4 takes a about a minute to run
     num_samples = 10
     pred_dict = get_autotuned_predictions_data(train, test, hypers, num_samples, model_predict_fns[model], verbose=False, parallel=False)
     out[model] = pred_dict
+    print("Model output:")
+    print(out[model])
     plot_preds(train, test, pred_dict, model, show_samples=True)

@@ -1,3 +1,18 @@
+# CTF Notes
+
+```bash
+pyenv install 3.11.11
+pyenv local 3.11.11
+python -m venv ~/.virtualenvs/llmtime
+source ~/.virtualenvs/llmtime/bin/activate
+pip install .
+cd ../../
+pip install -e .[all]
+```
+
+- Log into huggingface using `huggingface-cli login --token "<TOKEN>"`
+- Main codes are in the `ctf/` folder, use `run.py`
+
 # Large Language Models Are Zero Shot Time Series Forecasters
 
 This repository contains the code for the paper

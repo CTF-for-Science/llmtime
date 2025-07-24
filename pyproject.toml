@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools >= 64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llmtime"
+version = "0.1"
+dependencies = [
+    "numpy",
+    "jax[cpu]",
+    "openai==0.28.1",
+    "tiktoken",
+    "tqdm",
+    "matplotlib",
+    "pandas",
+    "darts",
+    "gpytorch",
+    "transformers",
+    "datasets",
+    "multiprocess",
+    "SentencePiece",
+    "accelerate",
+    "gdown",
+    "mistralai",
+    "jupyterlab",
+    "ipykernel",
+    "ipywidgets",
+    "imageio"
+]
+description = "llmtime"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["*"]
+exclude = []
+namespaces = true
