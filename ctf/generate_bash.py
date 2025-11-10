@@ -40,6 +40,7 @@ echo "Finished running Python"
 n_parallel = 1
 datasets = ["seismo"]
 pair_ids = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+seeds = [1, 2, 3, 4, 5]
 validation = 0
 recon_ctx = 50
 
@@ -64,26 +65,27 @@ for device in devices:
 
 for dataset in datasets:
     for pair_id in pair_ids:
-        identifier = f"{dataset}_{pair_id}"
+        for seed in seeds:
+            identifier = f"{dataset}_{pair_id}_seed{seed}"
 
-        # Determine which device and parallel script to use based on counter
-        device_idx = device_counter % len(devices)
-        parallel_idx = (device_counter // len(devices)) % n_parallel
-        current_device = devices[device_idx]
-        script_key = f"{current_device}_{parallel_idx}"
-        
-        cmd = bash_template_1.format(
-            dataset=dataset,
-            pair_id=pair_id,
-            recon_ctx=recon_ctx,
-            validation=validation,
-            identifier=identifier,
-        )
+            # Determine which device and parallel script to use based on counter
+            device_idx = device_counter % len(devices)
+            parallel_idx = (device_counter // len(devices)) % n_parallel
+            current_device = devices[device_idx]
+            script_key = f"{current_device}_{parallel_idx}"
+            
+            cmd = bash_template_1.format(
+                dataset=dataset,
+                pair_id=pair_id,
+                recon_ctx=recon_ctx,
+                validation=validation,
+                identifier=identifier,
+            )
 
-        # Add the command to the appropriate bash script
-        bash_scripts[script_key] += cmd
+            # Add the command to the appropriate bash script
+            bash_scripts[script_key] += cmd
 
-        device_counter += 1
+            device_counter += 1
 
 # Add the closing template to each script and write to files
 for script_key, script_content in bash_scripts.items():
@@ -103,6 +105,6 @@ for script_key, script_content in bash_scripts.items():
     
     print(f"Generated bash script: {filepath}")
 
-print(f"Total jobs: {len(datasets) * len(pair_ids)}")
+print(f"Total jobs: {len(datasets) * len(pair_ids) * len(seeds)}")
 print(f"Total scripts generated: {total_scripts}")
-print(f"Jobs per script: ~{len(datasets) * len(pair_ids) // total_scripts} (with remainder distributed)")
+print(f"Jobs per script: ~{len(datasets) * len(pair_ids) * len(seeds) // total_scripts} (with remainder distributed)")
