@@ -32,6 +32,9 @@ pickle_dir.mkdir(parents=True, exist_ok=True)
 ckpt_dir.mkdir(parents=True, exist_ok=True)
 
 def main(args=None):
+    # Start timing from the beginning of main
+    main_start_time = time.time()
+    
     # ## Model Parameters
 
     print("> Setting up model parameters")
@@ -132,10 +135,20 @@ def main(args=None):
     forecast_loops = forecast_length // prediction_length + (forecast_length % prediction_length > 0)
 
     for i in range(pred_ckpt['i'], forecast_loops):
+        
         print(f"> ({i+1}/{forecast_loops}) Train Mat Shape:", train_mat_in.shape)
 
         pred_l = []
         for j in range(train_mat_in.shape[1]):
+
+            # Check if max time has been exceeded
+            if args.max_time_hours is not None:
+                elapsed_hours = (time.time() - main_start_time) / 3600.0
+                if elapsed_hours > args.max_time_hours:
+                    print(f"> Maximum time of {args.max_time_hours} hours exceeded ({elapsed_hours:.2f} hours elapsed)")
+                    print(f"> Exiting after {i} iterations (out of {forecast_loops})")
+                    sys.exit(1)
+
             start_t = time.time()
             model_hypers[model].update({'dataset_name': args.dataset})
             hypers = list(grid_iter(model_hypers[model]))
@@ -203,6 +216,7 @@ if __name__ == '__main__':
     parser.add_argument('--recon_ctx', type=int, default=20, help="Context length for reconstruction")
     parser.add_argument('--validation', type=int, default=0, help="Generate and use validation set")
     parser.add_argument('--device', type=str, default=None, required=True, help="Device to run on")
+    parser.add_argument('--max_time_hours', type=float, default=None, help="Maximum time in hours for the forecast loop")
     args = parser.parse_args()
 
     # Args
