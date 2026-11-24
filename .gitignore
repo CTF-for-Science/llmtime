@@ -170,3 +170,4 @@ cython_debug/
 *.out
 .python-version
 bash/
+ctf/hf_token

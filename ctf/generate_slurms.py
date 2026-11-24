@@ -2,6 +2,9 @@ from pathlib import Path
 
 top_dir = Path(__file__).parent.parent
 
+# Each job runs ctf/run.py on one per-pair config (forecast + CTF evaluation + plots).
+# run.py resumes from checkpoints/<dataset>_<pair_id>.pkl, so a job that hits the
+# wall time can simply be resubmitted.
 cmd_template = \
 """\
 #!/bin/bash
@@ -12,85 +15,96 @@ cmd_template = \
 #SBATCH --ntasks=1
 #SBATCH --gpus=1
 #SBATCH --mem={memory}G
-#SBATCH --cpus-per-task=5
-#SBATCH --time=4-00:00:00
+#SBATCH --cpus-per-task={cpus}
+#SBATCH --time={time}
 #SBATCH --nice=0
 
 #SBATCH --job-name="{identifier}"
-#SBATCH --output=/mmfs1/home/alexeyy/storage/CTF-for-Science/models/llmtime/logs/"{identifier}".out
+#SBATCH --output={log_dir}/"{identifier}".out
 
 #SBATCH --mail-type=NONE
-#SBATCH --mail-user=alexeyy@uw.edu
 
 identifier={identifier}
 
-repo="/mmfs1/home/alexeyy/storage/CTF-for-Science/models/llmtime"
-
-recon_ctx={recon_ctx}
-dataset={dataset}
-pair_id={pair_id}
-validation={validation}
+repo="{repo}"
 
 echo "Running Python"
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export OMP_NUM_THREADS=${{SLURM_CPUS_PER_TASK:-1}}
+export MKL_NUM_THREADS=${{SLURM_CPUS_PER_TASK:-1}}
+export OPENBLAS_NUM_THREADS=${{SLURM_CPUS_PER_TASK:-1}}
 
 cd $repo
 eval "$(micromamba shell hook --shell bash)"
-micromamba activate llmtime
+micromamba activate {env}
 
-python -u $repo/ctf/forecast.py --dataset $dataset --pair_id $pair_id --validation $validation --identifier $identifier
+python -u $repo/ctf/run.py $repo/ctf/config/config_{dataset}_p{pair_id}.yaml
 
 echo "Finished running Python"
 """
 
-# Clean up slurm repo
 slurm_dir = top_dir / 'slurms'
+log_dir = top_dir / 'logs'
+slurm_dir.mkdir(exist_ok=True)
+log_dir.mkdir(exist_ok=True)
+
+# Clean up slurm repo
 for file in slurm_dir.glob('*.slurm'):
     file.unlink()
 
-datasets = ["KS_Official", "Lorenz_Official"]
+# Per-dataset host memory (GB). mhd-2cyls pairs 8/9 load 3 x 1 GB training matrices
+# on top of the LLM.
+datasets = {
+    "pke-hpmr": 32,
+    "dynasty": 32,
+    "msfr": 48,
+    "mhd-2cyls": 64,
+}
 pair_ids = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-validations = [0]
-recon_ctxs = [20]
+# Verify with `hyakalloc` / `sinfo` before submitting
 account = "amath"
 partition = "gpu-rtx6k"
-memory = 45
+cpus = 4
+time = "1-00:00:00"
+env = "llmtime"
 
 skip_count = 0
 write_count = 0
 total_count = 0
 
-for validation in validations:
-    for dataset in datasets:
-        for pair_id in pair_ids:
-            for recon_ctx in recon_ctxs:
-                identifier = f"{dataset}_p{pair_id}_v{validation:d}_r{recon_ctx}"
+for dataset, memory in datasets.items():
+    for pair_id in pair_ids:
+        # Must match the identifier used by run.py
+        identifier = f"{dataset}_{pair_id}"
 
-                cmd = cmd_template.format(
-                    dataset=dataset,
-                    pair_id=pair_id,
-                    validation=validation,
-                    recon_ctx=recon_ctx,
-                    identifier=identifier,
-                    partition=partition,
-                    account=account,
-                    memory=memory,
-                )
+        cmd = cmd_template.format(
+            dataset=dataset,
+            pair_id=pair_id,
+            identifier=identifier,
+            partition=partition,
+            account=account,
+            memory=memory,
+            cpus=cpus,
+            time=time,
+            env=env,
+            repo=top_dir.resolve(),
+            log_dir=log_dir.resolve(),
+        )
 
-                total_count += 1
+        total_count += 1
 
-                # Skip creating slurms that are completed
-                pickle_file = top_dir / 'pickles' / f'{identifier}.pkl'
+        # Skip creating slurms that are completed
+        pickle_file = top_dir / 'pickles' / f'{identifier}.pkl'
 
-                if pickle_file.exists():
-                    #print(f'Skipping {identifier}')
-                    skip_count += 1
-                    continue
+        if pickle_file.exists():
+            #print(f'Skipping {identifier}')
+            skip_count += 1
+            continue
 
-                with open(top_dir / 'slurms' / f'{identifier}.slurm', "w") as f:
-                    f.write(cmd)
-                    write_count += 1
+        with open(slurm_dir / f'{identifier}.slurm', "w") as f:
+            f.write(cmd)
+            write_count += 1
 
 print(f"Skipped {skip_count} jobs")
 print(f"Created {write_count} jobs")

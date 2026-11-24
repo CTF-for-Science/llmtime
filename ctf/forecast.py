@@ -16,7 +16,8 @@ from datetime import timedelta
 top_dir = Path(__file__).parent.parent
 sys.path.append(str(top_dir))
 
-os.environ['OMP_NUM_THREADS'] = '4'
+# Size thread pools from the Slurm allocation (shared cluster), default 1
+os.environ.setdefault('OMP_NUM_THREADS', os.environ.get('SLURM_CPUS_PER_TASK', '1'))
 #os.environ['HF_HOME'] = "/mmfs1/home/alexeyy/storage/.cache/huggingface"
 from models.utils import grid_iter
 from models.llmtime import get_llmtime_predictions_data
@@ -24,12 +25,46 @@ from data.small_context import get_datasets
 from models.validation_likelihood_tuning import get_autotuned_predictions_data
 from data.serialize import SerializerSettings
 
-from ctf4science.data_module import load_validation_dataset, load_dataset, get_prediction_timesteps, get_validation_prediction_timesteps, get_validation_training_timesteps, get_metadata
+from ctf4science.data_module import load_validation_dataset, load_dataset, get_prediction_timesteps, get_validation_prediction_timesteps, get_validation_training_timesteps, get_metadata, get_config
 
 pickle_dir = top_dir / 'pickles'
 ckpt_dir = top_dir / 'checkpoints'
 pickle_dir.mkdir(parents=True, exist_ok=True)
 ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+def save_ckpt(ckpt_path, pred_ckpt):
+    """Write the checkpoint atomically (tmp file + rename) so a kill mid-write can't corrupt it."""
+    tmp = ckpt_path.with_suffix('.pkl.tmp')
+    with open(tmp, "wb") as f:
+        pickle.dump(pred_ckpt, f)
+    os.replace(tmp, ckpt_path)
+
+
+def get_pair_config(dataset, pair_id):
+    """Return the pair entry from the dataset YAML."""
+    config = get_config(dataset)
+    pair = next((p for p in config['pairs'] if p['id'] == pair_id), None)
+    if pair is None:
+        raise ValueError(f"Pair id {pair_id} not found in {dataset} config")
+    return pair
+
+
+def test_includes_init(dataset, pair_id):
+    """Whether the test matrix of a burn-in pair (8, 9) starts with the initialization matrix.
+
+    Legacy datasets (e.g. KS_Official, Lorenz_Official) include the burn-in segment at the
+    start of the test matrix. Newer datasets (pke-hpmr, dynasty, msfr, mhd-2cyls) start the
+    test matrix right after the initialization matrix. Decided from `matrix_start_index`;
+    falls back to the legacy behaviour if the indices are not available.
+    """
+    pair = get_pair_config(dataset, pair_id)
+    starts = get_metadata(dataset).get('matrix_start_index', {}) or {}
+    s_init = starts.get(pair.get('initialization'))
+    s_test = starts.get(pair.get('test'))
+    if s_init is None or s_test is None:
+        return True
+    return s_test <= s_init
+
 
 def main(args=None):
     # Start timing from the beginning of main
@@ -44,6 +79,9 @@ def main(args=None):
         alpha=0.99,
         beta=0.3,
         basic=False,
+        # test_mat is a dummy zero array, so NLL/D on it is meaningless (and can overflow
+        # the serializer's max_val for channels far from 0); it is not used for forecasting.
+        compute_nll=False,
         settings=SerializerSettings(base=10, prec=3, time_sep=',', bit_sep='', plus_sign='', minus_sign='-', signed=True), 
     )
 
@@ -99,8 +137,11 @@ def main(args=None):
         train_mat = train_data[0]
     elif pair_id in [8, 9]:
         # Burn-in
-        print(f"> Burn-in matrix of size {init_data.shape[0]}, using {forecast_length} forecast length")
         train_mat = init_data
+        init_in_test = test_includes_init(dataset, pair_id)
+        if init_in_test:
+            forecast_length = forecast_length - init_data.shape[0]
+        print(f"> Burn-in matrix of size {init_data.shape[0]} (included in test: {init_in_test}), using {forecast_length} forecast length")
     else:
         raise ValueError(f"Pair id {pair_id} not supported")
 
@@ -137,8 +178,28 @@ def main(args=None):
         
         print(f"> ({i+1}/{forecast_loops}) Train Mat Shape:", train_mat_in.shape)
 
-        pred_l = []
-        for j in range(train_mat_in.shape[1]):
+        # Resume channels already finished for this chunk (saved per channel, see below)
+        pred_l = list(pred_ckpt['partial']) if pred_ckpt.get('partial_i') == i else []
+        if pred_l:
+            print(f"> Resuming chunk {i+1} at dim {len(pred_l)+1} of {train_mat_in.shape[1]}")
+        if args.batch_seqs and args.batch_seqs > 0:
+            # Batched multi-channel sampling (method-preserving speedup, see ctf/batched.py)
+            if args.max_time_hours is not None:
+                elapsed_hours = (time.time() - main_start_time) / 3600.0
+                if elapsed_hours > args.max_time_hours:
+                    print(f"> Maximum time of {args.max_time_hours} hours exceeded ({elapsed_hours:.2f} hours elapsed)")
+                    print(f"> Exiting after {i} iterations (out of {forecast_loops})")
+                    sys.exit(1)
+            from ctf.batched import batched_medians
+            start_t = time.time()
+            ctx_cols = [train_mat_in[-context:, j] for j in range(train_mat_in.shape[1])]
+            med = batched_medians(ctx_cols, prediction_length, llama_hypers['settings'], num_samples=num_samples,
+                                  temp=llama_hypers['temp'], alpha=llama_hypers['alpha'], beta=llama_hypers['beta'],
+                                  basic=llama_hypers['basic'], max_seqs=args.batch_seqs)
+            pred_l = [med[:, j] for j in range(med.shape[1])]
+            str_t = str(timedelta(seconds=time.time()-start_t)).split('.')[0]
+            print(f"  Predicted all {train_mat_in.shape[1]} dims batched ({str_t})")
+        for j in ([] if (args.batch_seqs and args.batch_seqs > 0) else range(len(pred_l), train_mat_in.shape[1])):
 
             # Check if max time has been exceeded
             if args.max_time_hours is not None:
@@ -156,23 +217,28 @@ def main(args=None):
             print(f"median shape: {median.shape}")
 
             pred_l.append(median)
+            # Per-channel progress so a timeout/preemption mid-chunk loses at most one call
+            pred_ckpt['partial_i'] = i
+            pred_ckpt['partial'] = pred_l
+            save_ckpt(ckpt_path, pred_ckpt)
             end_t = time.time()
             str_t = str(timedelta(seconds=end_t-start_t)).split('.')[0]
 
-            print(f"  Predicted dim {j+1} of {train_mat.shape[1]} ({str_t})")
+            print(f"  Predicted dim {j+1} of {train_mat_in.shape[1]} ({str_t})")
         
         pred_i = np.stack(pred_l, axis=1)
         train_mat_in = np.vstack([train_mat_in, pred_i])
         train_mat_in = train_mat_in.astype(np.float32)
 
-        # Save prediction
-        pred_ckpt['i'] = i
+        # Save prediction (store the next loop index to resume from)
+        pred_ckpt['i'] = i + 1
         pred_ckpt['train_mat_in'] = train_mat_in
-        with open(ckpt_path, "wb") as f:
-            pickle.dump(pred_ckpt, f)
+        pred_ckpt.pop('partial_i', None)
+        pred_ckpt.pop('partial', None)
+        save_ckpt(ckpt_path, pred_ckpt)
 
     # Save prediction
-    raw_pred = train_mat_in[train_mat.shape[0]:train_mat.shape[0]+prediction_length,:]
+    raw_pred = train_mat_in[train_mat.shape[0]:train_mat.shape[0]+forecast_length,:]
 
     print("> Concatenated Shape", raw_pred.shape)
 
@@ -188,7 +254,7 @@ def main(args=None):
         pred = raw_pred
     elif pair_id in [8, 9]:
         # Burn-in
-        pred = raw_pred
+        pred = np.vstack([train_mat, raw_pred]) if init_in_test else raw_pred
     else:
         raise ValueError(f"Pair id {pair_id} not supported") 
 
@@ -197,10 +263,13 @@ def main(args=None):
     if args.validation:
         print("> Expected Shape: ", val_data.shape)
     else:
-        if dataset in ['seismo', 'ocean_das', 'msfr']:
-            print("> Expected Shape: ", md['matrix_shapes'][f'X{pair_id}test.npz'])
-        else:
-            print("> Expected Shape: ", md['matrix_shapes'][f'X{pair_id}test.mat'])
+        expected_shape = md['matrix_shapes'][get_pair_config(dataset, pair_id)['test']]
+        print("> Expected Shape: ", expected_shape)
+        if tuple(pred.shape) != tuple(expected_shape):
+            bad_path = pickle_dir / f"{args.identifier}.badshape.pkl"
+            with open(bad_path, "wb") as f:
+                pickle.dump(pred, f)
+            raise ValueError(f"Prediction shape {pred.shape} does not match expected test shape {expected_shape} (saved to {bad_path})")
 
     # ## Save prediction matrix
     with open(pickle_dir / f"{args.identifier}.pkl", "wb") as f:
@@ -214,7 +283,8 @@ if __name__ == '__main__':
     parser.add_argument('--pair_id', type=int, default=1, help="Pair_id to run (1-9)")
     parser.add_argument('--recon_ctx', type=int, default=20, help="Context length for reconstruction")
     parser.add_argument('--validation', type=int, default=0, help="Generate and use validation set")
-    parser.add_argument('--device', type=str, default=None, required=True, help="Device to run on")
+    parser.add_argument('--device', type=str, default=None, help="Device to run on (unused, model uses device_map='auto')")
+    parser.add_argument('--batch_seqs', type=int, default=0, help="If >0, batch channels in one generate call with up to this many sequences (channels*samples)")
     parser.add_argument('--max_time_hours', type=float, default=None, help="Maximum time in hours for the forecast loop")
     args = parser.parse_args()
 

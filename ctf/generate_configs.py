@@ -1,4 +1,4 @@
-# Write python code which generates config files for pair_ids 1-9 and for datasets KS_Official and Lorenz_Official
+# Write python code which generates config files for pair_ids 1-9 for each dataset below
 
 from pathlib import Path
 
@@ -11,22 +11,31 @@ model:
   name: llmtime
   recon_ctx: 20
   validation: 0
-"""
+{extra}"""
 
-# Define the datasets and pair_ids
-datasets = ["KS_Official", "Lorenz_Official"]
+# Define the datasets and per-dataset extra model options.
+# Every dataset is forecast in full space, one channel at a time (the original LLMTime method).
+datasets = {
+    "KS_Official": "",
+    "Lorenz_Official": "",
+    "pke-hpmr": "",     # 6 channels
+    "dynasty": "",      # 123 channels
+    "msfr": "",         # 19400 channels
+    "mhd-2cyls": "",    # 122400 channels
+}
 pair_ids = list(range(1, 10))  # 1-9
 
 # Get the directory where this script is located
 config_dir = Path(__file__).parent / 'config'
 
 # Generate config files
-for dataset in datasets:
+for dataset, extra in datasets.items():
     for pair_id in pair_ids:
         # Format the template with current values
         config_content = config_template.format(
             dataset=dataset,
-            pair_id=pair_id
+            pair_id=pair_id,
+            extra=extra,
         )
         
         # Create filename

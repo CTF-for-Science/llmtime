@@ -168,7 +168,7 @@ def generate_predictions(
     preds = [[completion_to_pred(completion, scaler.inv_transform) for completion in completions] for completions, scaler in zip(completions_list, scalers)]
     return preds, completions_list, input_strs
 
-def get_llmtime_predictions_data(train, test, model, settings, num_samples=10, temp=0.7, alpha=0.95, beta=0.3, basic=False, parallel=True, **kwargs):
+def get_llmtime_predictions_data(train, test, model, settings, num_samples=10, temp=0.7, alpha=0.95, beta=0.3, basic=False, parallel=True, compute_nll=True, **kwargs):
     """
     Obtain forecasts from an LLM based on training series (history) and evaluate likelihood on test series (true future).
     train and test can be either a single time series or a list of time series.
@@ -242,7 +242,7 @@ def get_llmtime_predictions_data(train, test, model, settings, num_samples=10, t
         'input_strs': input_strs,
     }
     # Compute NLL/D on the true test series conditioned on the (truncated) input series
-    if nll_fn is not None:
+    if nll_fn is not None and compute_nll:
         BPDs = [nll_fn(input_arr=input_arrs[i], target_arr=test[i].values, settings=settings, transform=scalers[i].transform, count_seps=True, temp=temp) for i in range(len(train))]
         out_dict['NLL/D'] = np.mean(BPDs)
     return out_dict

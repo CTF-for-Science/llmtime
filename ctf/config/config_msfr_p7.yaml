@@ -1,0 +1,8 @@
+dataset:
+  name: msfr
+  pair_id:
+  - 7
+model:
+  name: llmtime
+  recon_ctx: 20
+  validation: 0

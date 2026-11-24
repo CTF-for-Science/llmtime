@@ -1,4 +1,5 @@
 import os
+import sys
 import yaml
 import time
 import torch
@@ -41,7 +42,9 @@ def main(config_path: str) -> None:
 
     # Generate a unique batch_id for this run
     # Define the name of the output folder for your batch
-    batch_id = f"batch_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    # Suffix with the Slurm job id (or pid) so parallel jobs starting in the same second
+    # don't share a batch directory and overwrite each other's batch_results.yaml
+    batch_id = f"batch_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.environ.get('SLURM_JOB_ID', os.getpid())}"
 
     # Initialize batch results dictionary for summary
     batch_results = {
@@ -63,24 +66,31 @@ def main(config_path: str) -> None:
         # Prepare commands
         cmd_1 = \
         """\
-        python\
+        {python}\
         {llmtime_main_path}\
         --identifier {identifier}\
         --dataset {dataset}\
         --pair_id {pair_id}\
         --recon_ctx {recon_ctx}\
         --validation {validation}\
+        {max_time}\
+        {batch_seqs}\
         """
 
         identifier = f"{dataset_name}_{pair_id}"
 
         cmd_formatted_1 = cmd_1.format(
+            python = sys.executable,
             llmtime_main_path = file_dir / "forecast.py",
             identifier = identifier,
             dataset = config['dataset']['name'],
             pair_id = pair_id,
             recon_ctx = config['model']['recon_ctx'],
             validation = config['model']['validation'],
+            max_time = (f"--max_time_hours {config['model']['max_time_hours']}"
+                        if config['model'].get('max_time_hours') is not None else ""),
+            batch_seqs = (f" --batch_seqs {config['model']['batch_seqs']}"
+                          if config['model'].get('batch_seqs') else ""),
         )
 
         # Execute command 1
